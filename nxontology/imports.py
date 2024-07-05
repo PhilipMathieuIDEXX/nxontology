@@ -8,12 +8,43 @@ from typing import AnyStr, BinaryIO, Counter, cast
 import networkx as nx
 from pronto import Ontology as Prontology  # type: ignore [attr-defined]
 from pronto.term import Term
+from pronto.pv import PropertyValue, LiteralPropertyValue, ResourcePropertyValue
 
 from nxontology import NXOntology
 from nxontology.exceptions import NodeNotFound
 from nxontology.node import NodeT
 
+import json
+
 logger = logging.getLogger(__name__)
+
+def annotations_to_attrs(term: Term) -> dict[str, str] | dict[str, float]:
+    """
+    Convert a pronto term to an `attrs` dictionary.
+    The attributes are the same as those of the original term.
+    """
+    properties = {}
+    for a in term.annotations:
+        if isinstance(a, LiteralPropertyValue):
+            try:
+                obj = json.loads(a.literal)
+                if isinstance(obj, dict):
+                    properties.update({f"{a.property}_{k}" : json.dumps(v) for k, v in obj.items()})
+                else:
+                    properties[a.property] = obj
+            except TypeError as e:
+                logger.debug("Could not parse JSON literal %s", a.literal, exc_info=e)
+                properties[a.property] = a.literal
+            except json.JSONDecodeError as e:
+                logger.debug("Could not parse JSON literal %s", a.literal, exc_info=e)
+                properties[a.property] = a.literal
+        elif isinstance(a, ResourcePropertyValue):
+            properties[a.property] = a.resource
+        else:
+            logger.warning("Unknown annotation type %s", type(a))
+        # replace NoneTypes with empty strings
+        properties = {k : v if v is not None else "" for k, v in properties.items()}
+    return properties
 
 
 def pronto_to_nxontology(onto: Prontology) -> NXOntology[str]:
@@ -33,8 +64,9 @@ def pronto_to_nxontology(onto: Prontology) -> NXOntology[str]:
         nxo.add_node(
             term.id,
             identifier=term.id,
-            name=term.name,
-            namespace=term.namespace,
+            name=term.name if term.name is not None else "",
+            namespace=term.namespace if term.namespace is not None else "",
+            **annotations_to_attrs(term),
         )
     for term in onto.terms():
         # add subClassOf / is_a relations
